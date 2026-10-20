@@ -1,4 +1,14 @@
 import re
+import time
+import sys
+
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 from agents import build_search_agent , writer_chain , critic_chain
 from tools import web_search , scrape_many
 from config import MAX_URLS , SCRAPE_CHARS , MIN_SCORE , MAX_ROUNDS , CRITIC_RESEARCH_CHARS
@@ -40,7 +50,7 @@ def run_search_step(topic: str):
     try:
         search_agent = build_search_agent()
         result = search_agent.invoke({
-            "messages": [("user", f"Use the web_search tool to find recent, reliable and detailed information about: {topic}")]
+            "messages": [("user", f"Use the web_search tool with query='{topic}' to find recent, reliable and detailed information on this topic.")]
         })
         summary = _text(result["messages"][-1])
         # raw tool output holds every URL (agent summary may drop some)
@@ -71,6 +81,22 @@ def run_reader_step(urls: list) -> str:
 
 
 # ── Step 3+4: writer <-> critic loop ─────────────────────────────────────────
+def _invoke_with_retry(chain, payload: dict, desc: str = "LLM call", max_attempts: int = 3):
+    """Invokes chain with automatic backoff if rate limited by Groq."""
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return chain.invoke(payload)
+        except Exception as e:
+            err_str = str(e).lower()
+            if any(k in err_str for k in ["rate_limit", "413", "429", "tpm", "tokens per minute"]):
+                wait_time = attempt * 7
+                print(f"\n[Groq Rate Limit on {desc}]: Pausing {wait_time}s for token bucket recovery (attempt {attempt}/{max_attempts})...")
+                time.sleep(wait_time)
+            else:
+                raise e
+    return chain.invoke(payload)
+
+
 def run_writer_critic_loop(topic: str, research: str):
     """Returns (report, feedback, rounds_used). Revises until score >= MIN_SCORE."""
     best = (None, "", -1.0)
@@ -78,11 +104,20 @@ def run_writer_critic_loop(topic: str, research: str):
     rounds = 0
 
     for rounds in range(1, MAX_ROUNDS + 1):
-        report = writer_chain.invoke({"topic": topic, "research": current_research})
-        feedback = critic_chain.invoke({
+        if rounds > 1:
+            # Cool down between drafts to stay safely inside Groq's 8,000 TPM limit
+            time.sleep(6)
+
+        report = _invoke_with_retry(writer_chain, {"topic": topic, "research": current_research}, desc=f"Writer (Round {rounds})")
+        
+        # Brief pause between writer and critic
+        time.sleep(3)
+        
+        feedback = _invoke_with_retry(critic_chain, {
             "report": report,
             "research": research[:CRITIC_RESEARCH_CHARS],
-        })
+        }, desc=f"Critic (Round {rounds})")
+        
         score = parse_score(feedback)
         rank = score if score is not None else 0.0
         if rank > best[2]:
@@ -90,8 +125,9 @@ def run_writer_critic_loop(topic: str, research: str):
 
         if score is not None and score >= MIN_SCORE:
             break
+            
         current_research = (
-            f"{research}\n\n"
+            f"{research[:CRITIC_RESEARCH_CHARS]}\n\n"
             f"REVIEWER FEEDBACK ON PREVIOUS DRAFT (address every point):\n{feedback}"
         )
 

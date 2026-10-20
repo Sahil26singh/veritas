@@ -8,14 +8,19 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-llm = ChatGroq(model = GROQ_MODEL, temperature=0, max_retries=5)
+llm = ChatGroq(model=GROQ_MODEL, temperature=0, max_retries=3, max_tokens=1500)
 
 
 #1st agent
 def build_search_agent():
     return create_agent(
-        model = llm,
-        tools= [web_search]
+        model=llm,
+        tools=[web_search],
+        system_prompt=(
+            "You are an expert research search assistant. When searching, call the web_search tool "
+            "with a concise 'query' string representing the search topic. "
+            "Do not pass any extra arguments like cursor, offset, or id."
+        )
     )
 
 #2nd agent
@@ -43,7 +48,7 @@ Structure the report as:
 - Conclusion
 - Sources (list all URLs found in the research)
 
-Be detailed, factual and professional. If reviewer feedback is included in the research, address every point in it."""),
+Be detailed, factual and professional. Keep the report focused and under 800 words. If reviewer feedback is included in the research, address every point in it."""),
 ])
 
 writer_chain = writer_prompt | llm | StrOutputParser()

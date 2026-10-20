@@ -18,9 +18,16 @@ def _get_tavily():
     return TavilyClient(api_key=key)
 
 
-@tool
-def web_search(query : str) -> str:
-    """Search the web for recent and reliable information on a topic . Returns Titles , URLs and snippets."""
+from pydantic import BaseModel, Field
+
+
+class WebSearchInput(BaseModel):
+    query: str = Field(description="The search query string to look up on the web (e.g. 'autonomous humanoid robots 2026')")
+
+
+@tool("web_search", args_schema=WebSearchInput)
+def web_search(query: str) -> str:
+    """Search the web for recent and reliable information on a topic. Returns Titles, URLs and snippets."""
     try:
         results = _get_tavily().search(query=query, max_results=5)
     except Exception as e:
@@ -28,9 +35,9 @@ def web_search(query : str) -> str:
 
     out = []
 
-    for r in results['results']:
+    for r in results.get('results', []):
         out.append(
-            f"Title: {r['title']}\nURL: {r['url']}\nSnippet: {r['content'][:300]}\n"
+            f"Title: {r.get('title', 'Untitled')}\nURL: {r.get('url', '')}\nSnippet: {r.get('content', '')[:300]}\n"
         )
 
     return "\n----\n".join(out)
