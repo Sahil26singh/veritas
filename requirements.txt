@@ -1,0 +1,23 @@
+# Core LLM + LangChain ecosystem (create_agent needs LangChain 1.x)
+langchain>=1.0.0
+langchain-core>=1.0.0
+
+# Free Groq API
+langchain-groq>=0.3.0
+
+# Tavily Search Tool
+tavily-python>=0.3.0
+
+# Web scraping
+beautifulsoup4>=4.12.0
+requests>=2.31.0
+lxml>=5.0.0
+
+# Environment variables
+python-dotenv>=1.0.0
+
+# Logging / debugging
+rich>=13.7.0
+
+# UI
+streamlit>=1.35.0
