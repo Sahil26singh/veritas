@@ -1,42 +1,44 @@
-# Veritas (ResearchMind)
+# Veritas
 
-Most LLMs summarize from memory or skim quick search snippets—which often leads to hallucinations or surface-level answers. 
+Most LLMs summarize from memory or skim search snippets—which frequently leads to hallucinations or surface-level summaries.
 
-**Veritas** is a small multi-agent research pipeline that mimics how a human research team actually works: one person gathers real sources, another reads the full articles, a third drafts a detailed report, and a reviewer peer-reviews the draft to catch mistakes before anything gets finalized.
+**Veritas** is an optimized, rate-limit friendly research pipeline: it queries live web sources, reads complete articles, synthesizes a concise verified report with inline citations, and audits every factual claim against the sources.
 
 ---
 
-## What Actually Happens When You Run a Query
+## Architecture & Rate-Limit Minimization
 
 ```
 Your Topic 
     │
     ▼
-[ 1. Search Agent ]  ──▶  Queries live web sources via Tavily API
+[ 1. Web Search ]      ──▶  Direct Tavily search query (0 LLM calls)
     │
     ▼
-[ 2. Reader Agent ]  ──▶  Pulls full page content in parallel (no snippet skimming)
+[ 2. Content Reader ]  ──▶  Scrapes full pages in parallel with backfill (0 LLM calls)
     │
     ▼
-[ 3. Writer Agent ]  ──▶  Synthesizes facts into a structured, cited report
+[ 3. Writer Chain ]    ──▶  Drafts concise report (<500 words) with citations [1], [2] (1 LLM call)
     │
     ▼
-[ 4. Critic Agent ]  ──▶  Audits claims, fact-checks against sources & scores (0-10)
+[ 4. Critic Chain ]    ──▶  Structured audit & claim verification (1 LLM call)
     │                     
-    ├─── Score < 7   ──▶  Sends feedback back to Writer for revisions
-    └─── Score >= 7  ──▶  Final report ready with citations & markdown download
+    ├─── Score < 6     ──▶  Exactly one revision call addressing feedback (1 LLM call)
+    └─── Score >= 6    ──▶  Accepted directly with citations & markdown export
 ```
 
-1. **Search Agent**: Takes your topic and calls Tavily's web search API to discover authoritative, live articles and documentation.
-2. **Reader Agent**: Doesn't just rely on search snippets. It visits the top URLs concurrently using BeautifulSoup and pulls clean, dense body text.
-3. **Writer Agent**: Reads through all the gathered research and writes a structured draft containing an Introduction, Key Findings, actionable takeaways, and source citations.
-4. **Critic Agent**: Acts like a tough editor. It checks whether claims in the report are actually backed by the gathered sources, assigns an objective score out of 10, and points out weaknesses. If the draft scores below 7, it sends specific feedback back to the writer for an immediate rewrite.
+### Strict 2–3 LLM Call Budget
+- **Normal run**: Exactly **2 LLM calls** (Writer draft + Critic review).
+- **Worst-case run**: Exactly **3 LLM calls** (1 draft + 1 review + 1 revision).
+- **Zero LLM calls** in search or reader steps.
+- **Dual Model Rate-Limit Isolation**: `WRITER_MODEL` and `CRITIC_MODEL` use separate Groq models to operate in independent rate-limit buckets.
+- **Streamlit Caching**: All pipeline steps are wrapped in `@st.cache_data(ttl=3600)`, so repeat runs and reruns consume zero tokens and execute instantly.
 
 ---
 
 ## Getting Started
 
-### 1. Clone & Set Up Virtual Environment
+### 1. Virtual Environment Setup
 
 ```bash
 git clone https://github.com/Sahil26singh/veritas.git
@@ -51,18 +53,22 @@ python -m venv .venv
 # On Linux/macOS:
 source .venv/bin/activate
 
-# Install dependencies
+# Install pinned dependencies
 pip install -r requirements.txt
 ```
 
 ### 2. Configure API Keys
 
-Create a `.env` file in the root directory:
+Create a `.env` file in the root directory (see `.env.example`):
 
 ```env
 GROQ_API_KEY=your_groq_api_key_here
 TAVILY_API_KEY=your_tavily_api_key_here
-GROQ_MODEL=openai/gpt-oss-120b
+WRITER_MODEL=openai/gpt-oss-120b
+CRITIC_MODEL=openai/gpt-oss-20b
+REVISE_BELOW=6
+MAX_URLS=2
+SCRAPE_CHARS=1500
 ```
 
 > **Free API keys**:
@@ -71,43 +77,40 @@ GROQ_MODEL=openai/gpt-oss-120b
 
 ---
 
-## Running the Project
+## Running Veritas
 
-You can run Veritas either through a web interface or straight from your terminal:
-
-### Option A: Clean Web Interface (Streamlit)
+### Option A: Modern Web Interface (Streamlit)
 ```bash
 streamlit run app.py
 ```
-Open [http://localhost:8501](http://localhost:8501) in your browser. You get live step indicators, expandable raw sources, rendered markdown output, and a one-click `.md` download button.
+Open [http://localhost:8501](http://localhost:8501) in your browser. Features live pipeline indicators, expandable source data, real interactive topic chips, structured critic feedback, and markdown export.
 
 ### Option B: Terminal CLI
 ```bash
 python pipeline.py
 ```
-Prompts for a topic in your console and streams agent logs, drafted reports, and critic scores directly to stdout.
+Prompts for a topic in your console and streams execution results, formatted draft reports, and critic scores directly to stdout.
 
 ---
 
-## Tuning the Pipeline (`config.py`)
+## Configuration (`config.py`)
 
-All knobs are kept in [`config.py`](config.py) so you can tweak the pipeline without touching agent code:
+All tuning options can be configured via environment variables or modified in [`config.py`](config.py):
 
 | Setting | Default | Purpose |
 | --- | --- | --- |
-| `GROQ_MODEL` | `openai/gpt-oss-120b` | LLM used across all agents |
-| `MAX_URLS` | `2` | Number of webpages the Reader scrapes in parallel |
-| `SCRAPE_CHARS` | `2000` | Max characters retained per page (keeps token limits safe) |
-| `CRITIC_RESEARCH_CHARS`| `3000` | How much research context the Critic sees to verify claims |
-| `MIN_SCORE` | `7` | Quality threshold needed to accept the report without rewriting |
-| `MAX_ROUNDS` | `2` | Maximum drafts before finalizing the best version |
+| `WRITER_MODEL` | `openai/gpt-oss-120b` | High-capability model for writing and synthesizing reports |
+| `CRITIC_MODEL` | `openai/gpt-oss-20b` | Fast, separate model for structured claim verification |
+| `REVISE_BELOW` | `6` | Minimum score (0–10) required to accept report without a revision |
+| `MAX_URLS` | `2` | Number of webpages the reader scrapes concurrently |
+| `SCRAPE_CHARS` | `1500` | Character limit per scraped page to prevent token bloat |
 
 ---
 
-## Tech Behind It
+## Running Tests
 
-- **Orchestration**: [LangChain](https://github.com/langchain-ai/langchain)
-- **Fast LLM Inference**: [Groq Cloud](https://groq.com)
-- **Live Search**: [Tavily Search API](https://tavily.com)
-- **Scraping**: BeautifulSoup4 + Requests + LXML
-- **Frontend**: Streamlit with custom CSS
+Offline unit tests cover URL extraction, domain deduplication & selection, structured critic fallback, and the revise-at-most-once loop logic:
+
+```bash
+pytest
+```

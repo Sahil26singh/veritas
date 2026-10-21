@@ -3,14 +3,14 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Groq model (must support tool calling). Override in .env with GROQ_MODEL=...
-GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+# Groq models for separate rate-limit buckets
+WRITER_MODEL = os.getenv("WRITER_MODEL", "openai/gpt-oss-120b")
+CRITIC_MODEL = os.getenv("CRITIC_MODEL", "openai/gpt-oss-20b")
 
-# Research depth (tuned to stay well within Groq free-tier 8,000 TPM limit)
-MAX_URLS = 2            # how many pages the reader scrapes
-SCRAPE_CHARS = 2000     # characters kept per scraped page
-CRITIC_RESEARCH_CHARS = 3000   # how much research the critic sees to fact-check the report
+# Research depth and token budgets
+MAX_URLS = int(os.getenv("MAX_URLS", "2"))            # how many pages the reader scrapes
+SCRAPE_CHARS = int(os.getenv("SCRAPE_CHARS", "1500"))  # characters kept per scraped page
+CRITIC_SOURCE_CHARS = int(os.getenv("CRITIC_SOURCE_CHARS", str(SCRAPE_CHARS)))  # matched to avoid false unsupported flags
 
-# Critic loop
-MIN_SCORE = 7           # accept report if critic score >= this
-MAX_ROUNDS = 2          # max writer drafts (1 first draft + 1 revision)
+# Quality threshold: revise at most once if critic score is below this
+REVISE_BELOW = int(os.getenv("REVISE_BELOW", "6"))

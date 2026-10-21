@@ -1,14 +1,16 @@
-from langchain.tools import tool
-import re
-import requests
-from bs4 import BeautifulSoup
-from tavily import TavilyClient
+import logging
 import os
+import re
 from concurrent.futures import ThreadPoolExecutor
-from dotenv import load_dotenv
-from rich import print
+from bs4 import BeautifulSoup
+from langchain.tools import tool
+from pydantic import BaseModel, Field
+import requests
+from tavily import TavilyClient
+
 from config import SCRAPE_CHARS
-load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 
 def _get_tavily():
@@ -18,26 +20,33 @@ def _get_tavily():
     return TavilyClient(api_key=key)
 
 
-from pydantic import BaseModel, Field
-
-
 class WebSearchInput(BaseModel):
-    query: str = Field(description="The search query string to look up on the web (e.g. 'autonomous humanoid robots 2026')")
+    query: str = Field(
+        description="The search query string to look up on the web (e.g. 'autonomous humanoid robots 2026')"
+    )
 
 
 @tool("web_search", args_schema=WebSearchInput)
 def web_search(query: str) -> str:
-    """Search the web for recent and reliable information on a topic. Returns Titles, URLs and snippets."""
+    """Search the web for recent and reliable information on a topic. Returns Titles, URLs, scores and snippets."""
     try:
         results = _get_tavily().search(query=query, max_results=5)
     except Exception as e:
+        logger.error("Web search failed: %s", e)
         return f"Search failed: {str(e)}"
 
-    out = []
+    items = results.get("results", [])
+    # Sort results by Tavily relevance score descending
+    items.sort(key=lambda r: float(r.get("score", 0.0)), reverse=True)
 
-    for r in results.get('results', []):
+    out = []
+    for r in items:
+        title = r.get("title", "Untitled")
+        url = r.get("url", "")
+        score = float(r.get("score", 0.0))
+        snippet = (r.get("content") or "")[:300]
         out.append(
-            f"Title: {r.get('title', 'Untitled')}\nURL: {r.get('url', '')}\nSnippet: {r.get('content', '')[:300]}\n"
+            f"Title: {title}\nURL: {url}\nScore: {score:.4f}\nSnippet: {snippet}\n"
         )
 
     return "\n----\n".join(out)
@@ -45,7 +54,11 @@ def web_search(query: str) -> str:
 
 def _scrape(url: str, limit: int = SCRAPE_CHARS) -> str:
     try:
-        resp = requests.get(url, timeout=8, headers={"User-Agent": "Mozilla/5.0"})
+        resp = requests.get(
+            url,
+            timeout=8,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
+        )
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "html.parser")
         for tag in soup(["script", "style", "nav", "footer", "header", "aside", "form"]):
@@ -53,13 +66,8 @@ def _scrape(url: str, limit: int = SCRAPE_CHARS) -> str:
         text = soup.get_text(separator=" ", strip=True)
         return re.sub(r"\s+", " ", text)[:limit]
     except Exception as e:
+        logger.warning("Could not scrape %s: %s", url, e)
         return f"Could not scrape URL: {str(e)}"
-
-
-@tool
-def scrape_url(url: str) -> str:
-    """Scrape and return clean text content from a given URL for deeper reading."""
-    return _scrape(url)
 
 
 def scrape_many(urls, limit: int = SCRAPE_CHARS) -> dict:
